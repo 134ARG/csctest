@@ -2,11 +2,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <odd-even-sort.hpp>
-#include <bits/c++config.h>
 #include <mpi.h>
+#include <pthread.h>
 #include <iostream>
 #include <vector>
 
+#define USED_PROC_TAG 6
 #define DATA_SIZE_TAG 5
 #define SEND_BACK_TAG 4
 #define SIZE_TAG 3
@@ -35,6 +36,7 @@ namespace sort {
         if (MPI_SUCCESS != res) {
             throw std::runtime_error("failed to get MPI world rank");
         }
+        
 
         if (0 == rank) {
             information = std::make_unique<Information>();
@@ -61,6 +63,7 @@ namespace sort {
                 size_t data_size = end - begin;
                 size_t average = data_size / information->num_of_proc;
                 size_t extra = data_size % information->num_of_proc;
+                size_t used = (average ? information->num_of_proc : extra);
 
                 sendcounts = std::vector<int> (information->num_of_proc, average);
                 displs = std::vector<int> (information->num_of_proc, 0);
@@ -80,6 +83,7 @@ namespace sort {
                     if (start < end) {
                         size_t step = average + ((i < extra) ? 1 : 0);
                         MPI_Isend(&step, 1, MPI_UNSIGNED_LONG, i, SIZE_TAG, MPI_COMM_WORLD, &placeholder);
+                        MPI_Isend(&used, 1, MPI_UNSIGNED_LONG, i, USED_PROC_TAG, MPI_COMM_WORLD, &placeholder);
                         MPI_Isend(&data_size, 1, MPI_UNSIGNED_LONG, i, DATA_SIZE_TAG, MPI_COMM_WORLD, &placeholder);
                         MPI_Isend(&(*start), step, MPI_LONG, i, INIT_DATA_TAG, MPI_COMM_WORLD, &placeholder);
                         start += step;
@@ -94,6 +98,7 @@ namespace sort {
 
             size_t size = 0;
             size_t data_size = 0;
+            size_t process_limit = 0;
             std::vector<int64_t> elements{};
 
             MPI_Recv(&size, 1, MPI_UNSIGNED_LONG, 0, SIZE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -104,6 +109,7 @@ namespace sort {
 
             elements.resize(size);
 
+            MPI_Recv(&process_limit, 1, MPI_UNSIGNED_LONG, 0, USED_PROC_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             MPI_Recv(&data_size, 1, MPI_UNSIGNED_LONG, 0, DATA_SIZE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
             MPI_Recv(&(elements[0]), size, MPI_LONG, 0, INIT_DATA_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -115,49 +121,80 @@ namespace sort {
             int64_t recv_tail = INT64_MAX;
             int64_t send_tail = 0;
             if (rank & 1) {
-                int times = data_size;
+                int times = data_size/2+1;
                 MPI_Request placeholder;
                 MPI_Request placeholder2;
                 while(times--) {
-                    MPI_Isend(&(*head), 1, MPI_LONG, rank - 1, 0, MPI_COMM_WORLD, &placeholder);
-                    MPI_Recv(&(*head), 1, MPI_LONG, rank - 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    for (auto i = elements.begin()+1; i < elements.end(); i+=2) {
+                        if (*i < *(i-1)) {
+                            std::swap(*i, *(i-1));
+                        }
+                    }
+
+                    for (auto i = elements.begin()+2; i < elements.end(); i += 2) {
+                        if (*i < *(i-1)) {
+                            std::swap(*i, *(i-1));
+                        }
+                    }
+                    if (rank > 0) {
+                        MPI_Isend(&(*head), 1, MPI_LONG, rank - 1, 0, MPI_COMM_WORLD, &placeholder);
+                        MPI_Request_free(&placeholder);
+                        MPI_Irecv(&(*head), 1, MPI_LONG, rank - 1, 1, MPI_COMM_WORLD, &placeholder2);
+                        MPI_Wait(&placeholder2, MPI_STATUS_IGNORE);
+                        // MPI_Request_free(&placeholder2);
+
+                    }
                     
                     // std::sort(elements.begin(), elements.end());
 
-                    MPI_Recv(&recv_tail, 1, MPI_LONG, rank + 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    if (recv_tail > *tail) {
-                        send_tail = recv_tail;
-                    } else {
-                        send_tail = *tail;
-                        *tail = recv_tail;
+                    if (rank + 1 < process_limit) {
+                        MPI_Recv(&recv_tail, 1, MPI_LONG, rank + 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        if (recv_tail > *tail) {
+                            send_tail = recv_tail;
+                        } else {
+                            send_tail = *tail;
+                            *tail = recv_tail;
+                        }
+                        MPI_Isend(&send_tail, 1, MPI_LONG, rank + 1, 0, MPI_COMM_WORLD, &placeholder);
+                        MPI_Request_free(&placeholder);
                     }
-                    MPI_Isend(&send_tail, 1, MPI_LONG, rank + 1, 0, MPI_COMM_WORLD, &placeholder2);
+
                 }
-                MPI_Request_free(&placeholder);
-                MPI_Request_free(&placeholder2);
             } else {
-                int times = data_size;
+                int times = data_size/2+1;
                 MPI_Request placeholder;
                 MPI_Request placeholder2;
                 while(times--) {
-                    MPI_Recv(&recv_tail, 1, MPI_LONG, rank + 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    if (recv_tail > *tail) {
-                        send_tail = recv_tail;
-                    } else {
-                        send_tail = *tail;
-                        *tail = recv_tail;
+                    for (auto i = elements.begin()+1; i < elements.end(); i+=2) {
+                        if (*i < *(i-1)) {
+                            std::swap(*i, *(i-1));
+                        }
                     }
-                    MPI_Isend(&send_tail, 1, MPI_LONG, rank + 1, 1, MPI_COMM_WORLD, &placeholder);
-                    
-                    // std::sort(elements.begin(), elements.end());
 
-                    MPI_Isend(&(*head), 1, MPI_LONG, rank - 1, 1, MPI_COMM_WORLD, &placeholder2);
-                    if (rank != 0) {
+                    for (auto i = elements.begin()+2; i < elements.end(); i += 2) {
+                        if (*i < *(i-1)) {
+                            std::swap(*i, *(i-1));
+                        }
+                    }
+                    if (rank > 0) {
+                        MPI_Isend(&(*head), 1, MPI_LONG, rank - 1, 1, MPI_COMM_WORLD, &placeholder2);
+                        MPI_Request_free(&placeholder2);
+
                         MPI_Recv(&(*head), 1, MPI_LONG, rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                     }
+                    if (rank + 1 < process_limit) {
+                        MPI_Recv(&recv_tail, 1, MPI_LONG, rank + 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                        if (recv_tail > *tail) {
+                            send_tail = recv_tail;
+                        } else {
+                            send_tail = *tail;
+                            *tail = recv_tail;
+                        }
+                        MPI_Isend(&send_tail, 1, MPI_LONG, rank + 1, 1, MPI_COMM_WORLD, &placeholder);
+                        MPI_Request_free(&placeholder);
+
+                    }
                 }
-                MPI_Request_free(&placeholder);
-                MPI_Request_free(&placeholder2);
             }
 
         MPI_Gatherv(&(elements[0]), size, MPI_LONG, &(*begin), &(sendcounts[0]), &(displs[0]), MPI_LONG, 0, MPI_COMM_WORLD);
