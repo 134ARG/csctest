@@ -60,10 +60,15 @@ namespace sort {
             /// @todo: please modify the following code
             if (0 == rank) {
  
-                size_t data_size = end - begin;
-                size_t average = data_size / information->num_of_proc;
-                size_t extra = data_size % information->num_of_proc;
-                size_t used = (average ? information->num_of_proc : extra);
+                unsigned long data_size = end - begin;
+                unsigned long average = data_size / information->num_of_proc;
+                unsigned long extra = data_size % information->num_of_proc;
+                unsigned long used = 0;
+                if (average > 0) {
+                    used = information->num_of_proc;
+                } else {
+                    used = extra;
+                }
 
                 sendcounts = std::vector<int> (information->num_of_proc, average);
                 displs = std::vector<int> (information->num_of_proc, 0);
@@ -81,11 +86,17 @@ namespace sort {
                 auto start = begin;
                 for (size_t i = 0; i < information->num_of_proc; i++) {
                     if (start < end) {
-                        size_t step = average + ((i < extra) ? 1 : 0);
+                        unsigned long step = average + ((i < extra) ? 1 : 0);
+                        std::cout <<  "send process limit " << used << " to process " << i << std::endl;
+                        std::cout << "send step " << step << " to process " << i << std::endl;
                         MPI_Isend(&step, 1, MPI_UNSIGNED_LONG, i, SIZE_TAG, MPI_COMM_WORLD, &placeholder);
+                        MPI_Request_free(&placeholder);
                         MPI_Isend(&used, 1, MPI_UNSIGNED_LONG, i, USED_PROC_TAG, MPI_COMM_WORLD, &placeholder);
+                        MPI_Request_free(&placeholder);
                         MPI_Isend(&data_size, 1, MPI_UNSIGNED_LONG, i, DATA_SIZE_TAG, MPI_COMM_WORLD, &placeholder);
+                        MPI_Request_free(&placeholder);
                         MPI_Isend(&(*start), step, MPI_LONG, i, INIT_DATA_TAG, MPI_COMM_WORLD, &placeholder);
+                        MPI_Request_free(&placeholder);
                         start += step;
                     } else {
                         size_t step = 0;
@@ -96,9 +107,9 @@ namespace sort {
                 MPI_Request_free(&placeholder);
             }
 
-            size_t size = 0;
-            size_t data_size = 0;
-            size_t process_limit = 0;
+            unsigned long size = 0;
+            unsigned long data_size = 0;
+            unsigned long process_limit = 0;
             std::vector<int64_t> elements{};
 
             MPI_Recv(&size, 1, MPI_UNSIGNED_LONG, 0, SIZE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -109,7 +120,9 @@ namespace sort {
 
             elements.resize(size);
 
+            std::cout << "process limt at " << rank << " is " << process_limit << std::endl;
             MPI_Recv(&process_limit, 1, MPI_UNSIGNED_LONG, 0, USED_PROC_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            std::cout << process_limit << " rank " << rank << std::endl;
             MPI_Recv(&data_size, 1, MPI_UNSIGNED_LONG, 0, DATA_SIZE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
             MPI_Recv(&(elements[0]), size, MPI_LONG, 0, INIT_DATA_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
