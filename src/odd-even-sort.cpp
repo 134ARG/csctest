@@ -12,8 +12,8 @@
 #define SEND_BACK_TAG 4
 #define SIZE_TAG 3
 #define INIT_DATA_TAG 2
-#define ODD_SEND 1
-#define EVEN_SEND 0;
+#define EVEN_SEND 1
+#define ODD_SEND 0
 
 namespace sort {
     using namespace std::chrono;
@@ -58,12 +58,17 @@ namespace sort {
         do {
             /// now starts the main sorting procedure
             /// @todo: please modify the following code
+            unsigned long data_size;
+            unsigned long average;
+            unsigned long extra;
+            unsigned long used;
+
             if (0 == rank) {
  
-                unsigned long data_size = end - begin;
-                unsigned long average = data_size / information->num_of_proc;
-                unsigned long extra = data_size % information->num_of_proc;
-                unsigned long used = 0;
+                data_size = end - begin;
+                average = data_size / information->num_of_proc;
+                extra = data_size % information->num_of_proc;
+                used = 0;
                 if (average > 0) {
                     used = information->num_of_proc;
                 } else {
@@ -86,10 +91,10 @@ namespace sort {
                 auto start = begin;
                 for (size_t i = 0; i < information->num_of_proc; i++) {
                     if (start < end) {
-                        unsigned long step = average + ((i < extra) ? 1 : 0);
+                        unsigned long step = sendcounts[i];
                         std::cout <<  "send process limit " << used << " to process " << i << std::endl;
                         std::cout << "send step " << step << " to process " << i << std::endl;
-                        MPI_Isend(&step, 1, MPI_UNSIGNED_LONG, i, SIZE_TAG, MPI_COMM_WORLD, &placeholder);
+                        MPI_Isend(&(sendcounts[i]), 1, MPI_INT, i, SIZE_TAG, MPI_COMM_WORLD, &placeholder);
                         MPI_Request_free(&placeholder);
                         MPI_Isend(&used, 1, MPI_UNSIGNED_LONG, i, USED_PROC_TAG, MPI_COMM_WORLD, &placeholder);
                         MPI_Request_free(&placeholder);
@@ -99,20 +104,23 @@ namespace sort {
                         MPI_Request_free(&placeholder);
                         start += step;
                     } else {
-                        size_t step = 0;
-                        MPI_Isend(&step, 1, MPI_UNSIGNED_LONG, i, SIZE_TAG, MPI_COMM_WORLD, &placeholder);
+                        int step = 0;
+                        std::cout << "send step " << step << " to process " << i << std::endl;
+                        MPI_Send(&step, 1, MPI_INT, i, SIZE_TAG, MPI_COMM_WORLD);
                     }
                 }
                 
-                MPI_Request_free(&placeholder);
+                // MPI_Request_free(&placeholder);
             }
 
-            unsigned long size = 0;
-            unsigned long data_size = 0;
+            int size = 0;
+            data_size = 0;
             unsigned long process_limit = 0;
             std::vector<int64_t> elements{};
 
-            MPI_Recv(&size, 1, MPI_UNSIGNED_LONG, 0, SIZE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            
+            MPI_Recv(&size, 1, MPI_INT, 0, SIZE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            std::cout << "rank " << rank << " size " << size << std::endl;
             if (size == 0) {
                 std::cout << "Not used! I am " << rank << std::endl;
                 break;
@@ -120,97 +128,74 @@ namespace sort {
 
             elements.resize(size);
 
-            std::cout << "process limt at " << rank << " is " << process_limit << std::endl;
             MPI_Recv(&process_limit, 1, MPI_UNSIGNED_LONG, 0, USED_PROC_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             std::cout << process_limit << " rank " << rank << std::endl;
-            MPI_Recv(&data_size, 1, MPI_UNSIGNED_LONG, 0, DATA_SIZE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
+            MPI_Recv(&data_size, 1, MPI_UNSIGNED_LONG, 0, DATA_SIZE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            std::cout << "data size is " << data_size << std::endl;
             MPI_Recv(&(elements[0]), size, MPI_LONG, 0, INIT_DATA_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             std::cout << "rank " << rank << " received data." << std::endl;
+
 
             auto head = elements.begin();
             auto tail = elements.end() - 1;
                 
             int64_t recv_tail = INT64_MAX;
             int64_t send_tail = 0;
+ 
+            int send_tag = -1;
+            int receive_tag = -1;
+
             if (rank & 1) {
-                int times = data_size/2+1;
-                MPI_Request placeholder;
-                MPI_Request placeholder2;
-                while(times--) {
-                    for (auto i = elements.begin()+1; i < elements.end(); i+=2) {
-                        if (*i < *(i-1)) {
-                            std::swap(*i, *(i-1));
-                        }
-                    }
-
-                    for (auto i = elements.begin()+2; i < elements.end(); i += 2) {
-                        if (*i < *(i-1)) {
-                            std::swap(*i, *(i-1));
-                        }
-                    }
-                    if (rank > 0) {
-                        MPI_Isend(&(*head), 1, MPI_LONG, rank - 1, 0, MPI_COMM_WORLD, &placeholder);
-                        MPI_Request_free(&placeholder);
-                        MPI_Irecv(&(*head), 1, MPI_LONG, rank - 1, 1, MPI_COMM_WORLD, &placeholder2);
-                        MPI_Wait(&placeholder2, MPI_STATUS_IGNORE);
-                        // MPI_Request_free(&placeholder2);
-
-                    }
-                    
-                    // std::sort(elements.begin(), elements.end());
-
-                    if (rank + 1 < process_limit) {
-                        MPI_Recv(&recv_tail, 1, MPI_LONG, rank + 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                        if (recv_tail > *tail) {
-                            send_tail = recv_tail;
-                        } else {
-                            send_tail = *tail;
-                            *tail = recv_tail;
-                        }
-                        MPI_Isend(&send_tail, 1, MPI_LONG, rank + 1, 0, MPI_COMM_WORLD, &placeholder);
-                        MPI_Request_free(&placeholder);
-                    }
-
-                }
+                send_tag = ODD_SEND;
+                receive_tag  = EVEN_SEND;
             } else {
-                int times = data_size/2+1;
-                MPI_Request placeholder;
-                MPI_Request placeholder2;
-                while(times--) {
-                    for (auto i = elements.begin()+1; i < elements.end(); i+=2) {
-                        if (*i < *(i-1)) {
-                            std::swap(*i, *(i-1));
-                        }
-                    }
-
-                    for (auto i = elements.begin()+2; i < elements.end(); i += 2) {
-                        if (*i < *(i-1)) {
-                            std::swap(*i, *(i-1));
-                        }
-                    }
-                    if (rank > 0) {
-                        MPI_Isend(&(*head), 1, MPI_LONG, rank - 1, 1, MPI_COMM_WORLD, &placeholder2);
-                        MPI_Request_free(&placeholder2);
-
-                        MPI_Recv(&(*head), 1, MPI_LONG, rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                    }
-                    if (rank + 1 < process_limit) {
-                        MPI_Recv(&recv_tail, 1, MPI_LONG, rank + 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                        if (recv_tail > *tail) {
-                            send_tail = recv_tail;
-                        } else {
-                            send_tail = *tail;
-                            *tail = recv_tail;
-                        }
-                        MPI_Isend(&send_tail, 1, MPI_LONG, rank + 1, 1, MPI_COMM_WORLD, &placeholder);
-                        MPI_Request_free(&placeholder);
-
-                    }
-                }
+                send_tag = EVEN_SEND;
+                receive_tag  = ODD_SEND;
             }
 
-        MPI_Gatherv(&(elements[0]), size, MPI_LONG, &(*begin), &(sendcounts[0]), &(displs[0]), MPI_LONG, 0, MPI_COMM_WORLD);
+            int times = data_size/2+1;
+            MPI_Request send_head_request;
+            MPI_Request recv_head_request;
+            MPI_Request send_tail_request;
+
+            while(times--) {
+                // internel odd pass
+                for (auto i = elements.begin()+1; i < elements.end(); i+=2) {
+                    if (*i < *(i-1)) {
+                        std::swap(*i, *(i-1));
+                    }
+                }
+
+                // internel even pass
+                for (auto i = elements.begin()+2; i < elements.end(); i += 2) {
+                    if (*i < *(i-1)) {
+                        std::swap(*i, *(i-1));
+                    }
+                }
+                if (rank > 0) {
+                    MPI_Isend(&(*head), 1, MPI_LONG, rank - 1, send_tag, MPI_COMM_WORLD, &send_head_request);
+                    MPI_Request_free(&send_head_request);
+                    MPI_Irecv(&(*head), 1, MPI_LONG, rank - 1, receive_tag, MPI_COMM_WORLD, &recv_head_request);
+                    MPI_Wait(&recv_head_request, MPI_STATUS_IGNORE);
+                }
+                if (rank + 1 < process_limit) {
+                    MPI_Recv(&recv_tail, 1, MPI_LONG, rank + 1, receive_tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    // std::cout << "recv tail ends: " << rank << std::endl; 
+                    send_tail = (recv_tail > *tail) ? recv_tail : *tail;
+                    if (recv_tail > *tail) {
+                        send_tail = recv_tail;
+                    } else {
+                        send_tail = *tail;
+                        *tail = recv_tail;
+                    }
+                    MPI_Isend(&send_tail, 1, MPI_LONG, rank + 1, send_tag, MPI_COMM_WORLD, &send_tail_request);
+                    MPI_Request_free(&send_tail_request);
+                }
+            }
+            
+
+            MPI_Gatherv(&(elements[0]), size, MPI_LONG, &(*begin), &(sendcounts[0]), &(displs[0]), MPI_LONG, 0, MPI_COMM_WORLD);
 
         } while(0);
 
